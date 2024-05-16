@@ -1,5 +1,8 @@
 #pragma once
 
+#ifndef HUGE_PAGES_H
+#define HUGE_PAGES_H
+
 #ifdef __cplusplus
 #include <iostream>
 #include <stdlib.h>
@@ -17,6 +20,13 @@
 #define HUGE_PAGE_SIZE (2 * 1024*1024)
 #define ALIGN_TO_PAGE_SIZE(x) \
   (((x) + HUGE_PAGE_SIZE - 1) / HUGE_PAGE_SIZE * HUGE_PAGE_SIZE)
+
+// Macro to align a value to the nearest multiple of n
+#define ALIGN_TO(value, n) (((value) + (n) - 1) & ~((n) - 1))
+
+// Macro to calculate the offset necessary to align a pointer to n bytes
+#define ALIGN_OFFSET(ptr, n) (((n) - ((uintptr_t)(ptr) & ((n) - 1))) & ((n) - 1))
+
 
 #ifdef _WIN32
 
@@ -104,9 +114,14 @@ inline std::string GetLastErrorAsString()
 
 #endif
 
-inline void *malloc_huge_pages(size_t size)
+#ifdef __cplusplus
+extern "C" {
+#endif
+static inline void *malloc_huge_pages(size_t size)
 {
-  size_t real_size = ALIGN_TO_PAGE_SIZE(size + HUGE_PAGE_SIZE);
+  //size_t real_size = ALIGN_TO_PAGE_SIZE(size + HUGE_PAGE_SIZE);
+  size_t real_size = ALIGN_TO_PAGE_SIZE(size + sizeof(size_t));
+  real_size = ALIGN_TO(real_size, 64); // Align to 64 bytes
   char *ptr = NULL;
   #if defined(_WIN32)
   ptr = (char*)VirtualAlloc(NULL, real_size, MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES, PAGE_READWRITE);
@@ -126,24 +141,38 @@ inline void *malloc_huge_pages(size_t size)
     // #ifdef __cplusplus
     // std::cerr << "failed to allocate hugepages... using regular malloc" << std::endl;
     // #endif
-    ptr = (char *)malloc(real_size);
-    if (ptr == NULL) return NULL;
-    real_size = 0;
+    return NULL;
+    //ptr = (char *)malloc(real_size);
+    //if (ptr == NULL) return NULL;
+    //real_size = 0;
   }
   #endif
 
+
+  // Store the real size at the beginning of the allocated memory block
   *((size_t *) ptr) = real_size;
 
-  return ptr + HUGE_PAGE_SIZE;
+  // Return a pointer to the usable memory area, excluding the space used for bookkeeping
+  ptr = ptr + sizeof(size_t) + ALIGN_OFFSET(ptr + sizeof(size_t), 64);
+ // printf("HP: 0x%p\n", ptr);
+  return ptr;
 }
 
-inline void free_huge_pages(void *ptr)
+static inline void free_huge_pages(void *ptr)
 {
+
   if (ptr == NULL) return;
+   
 
-  void *real_ptr = (char *)ptr - HUGE_PAGE_SIZE;
+   // Retrieve the real_size
+   // Move back by the size of real_size and account for alignment padding
+   char *real_ptr = (char *)ptr - sizeof(size_t) - ALIGN_OFFSET((char *)ptr - sizeof(size_t), 64);
 
-  size_t real_size = *((size_t *)real_ptr);
+    // Retrieve the real_size
+   size_t real_size = *((size_t *)real_ptr);
+
+
+
 
   assert(real_size % HUGE_PAGE_SIZE == 0);
 
@@ -155,3 +184,7 @@ inline void free_huge_pages(void *ptr)
     #endif
   } else free(real_ptr);
 }
+#ifdef __cplusplus
+}
+#endif
+#endif // HUGE_PAGES_H
